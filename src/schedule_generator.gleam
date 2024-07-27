@@ -1,33 +1,127 @@
+import gleam/erlang/process
+import mist
 import gleam/io
+import gleam/json
+import gleam/dynamic.{type Dynamic}
+import gleam/http
+import wisp
 import gleam/bool
 import gleam/list
 
 pub fn main() {
-  let classes = [
-    Class("A", [
-      Option("A1", [TimeSlot(Monday, 400, 500), TimeSlot(Tuesday, 400, 500)]),
-      Option("A2", [TimeSlot(Wednesday, 400, 500), TimeSlot(Friday, 400, 500)]),
-      Option("A3", [TimeSlot(Monday, 400, 500), TimeSlot(Wednesday, 400, 500)]),
-      Option("A4", [TimeSlot(Tuesday, 400, 500), TimeSlot(Thursday, 400, 500)]),
-      Option("A5", [TimeSlot(Friday, 400, 500), TimeSlot(Saturday, 400, 500)]),
-      Option("A6", [TimeSlot(Monday, 400, 500), TimeSlot(Saturday, 400, 500)]),
-    ]),
-    Class("B", [
-      Option("B1", [TimeSlot(Monday, 400, 500), TimeSlot(Tuesday, 400, 500)]),
-      Option("B2", [TimeSlot(Wednesday, 400, 500), TimeSlot(Friday, 400, 500)]),
-      Option("B3", [TimeSlot(Monday, 400, 500), TimeSlot(Wednesday, 400, 500)]),
-      Option("B4", [TimeSlot(Tuesday, 400, 500), TimeSlot(Thursday, 400, 500)]),
-      Option("B5", [TimeSlot(Friday, 400, 500), TimeSlot(Saturday, 400, 500)]),
-      Option("B6", [TimeSlot(Monday, 400, 500), TimeSlot(Saturday, 400, 500)]),
-    ]),
-    Class("C", [
-      Option("C1", [TimeSlot(Sunday, 200, 300)])
-    ])
-  ]
+  wisp.configure_logger()
 
-  let schedules = generate_schedules(classes)
+  let secret_key_base = wisp.random_string(64)
 
-  io.debug(schedules)
+  let assert Ok(_) = wisp.mist_handler(handle_request, secret_key_base)
+  |> mist.new
+  |> mist.port(8000)
+  |> mist.start_http
+
+  process.sleep_forever()
+}
+
+fn handle_request(req: wisp.Request) -> wisp.Response {
+  use <- wisp.require_method(req, http.Post)
+  use json <- wisp.require_json(req)
+
+  let classes_decoder = dynamic.list(decode_class)
+  let classes_result = classes_decoder(json)
+  case classes_result {
+    Ok(classes) -> {
+      let schedules = generate_schedules(classes)
+      let schedules_json = json.array(schedules, encode_schedule)
+      wisp.json_response(json.to_string_builder(schedules_json), 200)
+    }
+    Error(error) -> {
+      io.debug(error)
+      wisp.bad_request()
+    }
+  }
+}
+
+fn encode_schedule(schedule: Schedule) -> json.Json {
+  json.object([
+    #("options", json.array(schedule.options, encode_option))
+  ])
+}
+
+fn encode_option(option: Option) -> json.Json {
+  json.object([
+    #("option_code", json.string(option.option_code)),
+    #("time_slots", json.array(option.time_slots, encode_time_slot))
+  ])
+}
+
+fn encode_time_slot(time_slot: TimeSlot) -> json.Json {
+  json.object([
+    #("day", json.string(string_from_day(time_slot.day))),
+    #("start_seconds_into_day", json.int(time_slot.start_seconds_into_day)),
+    #("end_seconds_into_day", json.int(time_slot.end_seconds_into_day))
+  ])
+}
+
+fn string_from_day(day: Day) -> String {
+  case day {
+    Monday -> "Monday"
+    Tuesday -> "Tuesday"
+    Wednesday -> "Wednesday"
+    Thursday -> "Thursday"
+    Friday -> "Friday"
+    Saturday -> "Saturday"
+    Sunday -> "Sunday"
+  }
+}
+
+fn decode_class(json: Dynamic) -> Result(Class, dynamic.DecodeErrors) {
+  let decoder = dynamic.decode2(
+    Class,
+    dynamic.field("class_name", dynamic.string),
+    dynamic.field("class_options", dynamic.list(decode_option))
+  )
+  decoder(json)
+}
+
+fn decode_option(json: Dynamic) -> Result(Option, dynamic.DecodeErrors) {
+  let decoder = dynamic.decode2(
+    Option,
+    dynamic.field("option_code", dynamic.string),
+    dynamic.field("time_slots", dynamic.list(decode_time_slot))
+  )
+  decoder(json)
+}
+
+fn decode_time_slot(json: Dynamic) -> Result(TimeSlot, dynamic.DecodeErrors) {
+  let decoder = dynamic.decode3(
+    TimeSlot,
+    dynamic.field("day", decode_day),
+    dynamic.field("start_seconds_into_day", dynamic.int),
+    dynamic.field("end_seconds_into_day", dynamic.int)
+  )
+  decoder(json)
+}
+
+fn decode_day(json: Dynamic) -> Result(Day, dynamic.DecodeErrors) {
+  let string_result = dynamic.string(json)
+  case string_result {
+    Ok(string) -> {
+      string_to_day(string)
+    }
+    Error(error) -> Error(error)
+  }
+}
+
+fn string_to_day(string: String) -> Result(Day, dynamic.DecodeErrors) {
+  case string {
+    "Monday" -> Ok(Monday)
+    "Tuesday" -> Ok(Tuesday)
+    "Wednesday" -> Ok(Wednesday)
+    "Thursday" -> Ok(Thursday)
+    "Friday" -> Ok(Friday)
+    "Saturday" -> Ok(Saturday)
+    "Sunday" -> Ok(Sunday)
+    _ -> Error([dynamic.DecodeError("A day of the week was expected", string, [])])
+  }
 }
 
 pub type Day {

@@ -4,6 +4,7 @@
   packages = [
     pkgs.gleam
     pkgs.erlang_26
+    pkgs.rebar3
   ];
 
   idx = {
